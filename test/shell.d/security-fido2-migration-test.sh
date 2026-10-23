@@ -201,9 +201,8 @@ SH
 
 chmod +x "$stub_bin/stat"
 
-# omarchy-migrate records this migration complete on any zero exit, so the
-# states it cannot repair have to reach the user somewhere that outlives the
-# update terminal's scrollback.
+# Unresolved states remain pending and also reach the user outside the update
+# terminal's scrollback.
 cat >"$stub_bin/omarchy-notification-send" <<'SH'
 #!/bin/bash
 
@@ -459,29 +458,31 @@ pass "migration repairs an authfile with the wrong mode"
 rm -rf "$authfile"
 ln -s "$test_tmp/elsewhere" "$authfile"
 : >"$test_tmp/elsewhere"
-run_migration
+if run_migration; then
+  fail "a symlinked authfile must leave the migration pending"
+fi
 [[ ! -s $calls ]] || fail "a symlinked authfile escalates nothing" "$(cat "$calls")"
 [[ -s $notifications ]] ||
   fail "a symlinked authfile is raised where the update terminal cannot swallow it"
 
 rm -f "$authfile"
 ln -s "$test_tmp/missing" "$authfile"
-run_migration
+if run_migration; then
+  fail "a dangling symlink must leave the migration pending"
+fi
 [[ ! -s $calls ]] || fail "a dangling symlink escalates nothing" "$(cat "$calls")"
 [[ -s $notifications ]] || fail "a dangling symlink is raised the same way"
 pass "migration reports a symlinked authfile and repairs nothing"
 
 rm -f "$authfile"
 mkdir -p "$authfile"
-run_migration
+if run_migration; then
+  fail "a non-regular authfile must leave the migration pending"
+fi
 [[ ! -s $calls ]] || fail "a directory at the authfile path escalates nothing" "$(cat "$calls")"
 [[ -s $notifications ]] || fail "a non-regular authfile is raised the same way"
 pass "migration reports a non-regular authfile and repairs nothing"
 
-# omarchy-migrate writes this migration's completion marker on any zero exit, so
-# a machine it cannot repair gets one shot at telling the user. The states above
-# are exactly the ones where the authfile may already be under someone else's
-# control, and a line in the update terminal scrolls past.
 # Assert the argument shape rather than a substring. The glyph is a private-use
 # codepoint that an edit can silently drop, and losing it shifts every argument
 # left: -g swallows the headline, the body becomes the title, and the message
@@ -545,13 +546,78 @@ fi
 chmod 755 "$authdir"
 pass "migration looks behind an inaccessible FIDO2 directory without widening it"
 
-# Notification delivery fails on a machine with no user bus or no notification
-# server. That must not abort the migration under `bash -euo pipefail` and take
-# every later migration with it.
+# Notification delivery can fail without a user bus or notification server.
+# The unresolved authfile must still fail the migration.
 rm -f "$authfile"
 ln -s "$test_tmp/missing" "$authfile"
-run_migration 0 0 "" "" "" normal 1
+if run_migration 0 0 "" "" "" normal 1; then
+  fail "an unresolved authfile fails even when its notification cannot be delivered"
+fi
 [[ -s $notifications ]] ||
   fail "the failing notification was still attempted" "$(cat "$notifications")"
-pass "migration survives a notification it could not deliver"
+pass "migration remains unresolved when its notification cannot be delivered"
 rm -f "$authfile"
+
+# A linked configuration directory must not redirect checks or privileged
+# staging, whether its target exists or not.
+write_authfile 644
+before_inode=$(stat -c %i "$authfile")
+mv "$authdir" "$test_tmp/linked-directory"
+ln -s "$test_tmp/linked-directory" "$authdir"
+if run_migration 0 0 root root 644; then
+  fail "a linked parent must fail even with a settled authfile at its target"
+fi
+[[ ! -s $calls && -L $authdir ]] || fail "a linked parent is left alone without escalation"
+[[ $(stat -c %i "$authfile") == "$before_inode" ]] || fail "the linked directory's authfile is unchanged"
+rm "$authdir"
+ln -s "$test_tmp/missing-directory" "$authdir"
+if run_migration; then
+  fail "a dangling parent link must leave the migration pending"
+fi
+[[ ! -s $calls && -L $authdir ]] || fail "a dangling parent is left alone without escalation"
+rm "$authdir"
+mv "$test_tmp/linked-directory" "$authdir"
+rm "$authfile"
+pass "migration rejects linked configuration directories without touching their targets"
+
+# Exercise the actual runner with the old completion marker already present:
+# the follow-up must still recheck, withhold its marker and stop later work.
+recheck="1792702724.sh"
+fixture_root="$test_tmp/omarchy"
+fixture_state="$test_tmp/state"
+mkdir -p "$fixture_root/migrations" "$fixture_state"
+sed "s|/etc/fido2/fido2|$authfile|" "$migration" >"$fixture_root/migrations/1787494718.sh"
+cp "$ROOT/migrations/$recheck" "$fixture_root/migrations/$recheck"
+printf 'touch "$OMARCHY_MIGRATION_STATE/later-ran"\n' >"$fixture_root/migrations/9999999999.sh"
+touch "$fixture_state/1787494718.sh"
+printf '#!/bin/bash\nexit 0\n' >"$stub_bin/omarchy-notification-dismiss"
+chmod +x "$stub_bin/omarchy-notification-dismiss"
+
+run_recheck() {
+  PATH="$stub_bin:$PATH" OMARCHY_PATH="$fixture_root" OMARCHY_MIGRATION_STATE="$fixture_state" \
+    TEST_NOTIFICATIONS="$notifications" TEST_NOTIFY_STATUS=1 \
+    bash "$ROOT/bin/omarchy-migrate" "$@" >"$test_tmp/recheck.log" 2>&1
+}
+
+ln -s "$test_tmp/elsewhere" "$authfile"
+printf 'preserve this target\n' >"$test_tmp/elsewhere"
+if run_recheck; then
+  fail "the follow-up fails despite the original completion marker"
+fi
+[[ ! -e $fixture_state/$recheck && ! -e $fixture_state/later-ran ]] ||
+  fail "an unresolved follow-up is not marked complete and stops the queue"
+[[ -L $authfile && $(cat "$test_tmp/elsewhere") == "preserve this target" ]] ||
+  fail "the follow-up preserves the unresolved link and its target"
+run_recheck --pending
+grep -Fxq "$recheck" "$test_tmp/recheck.log" || fail "the unresolved follow-up remains pending"
+grep -Fq 'Re-run omarchy-migrate' "$notifications" || fail "recovery instructions explain how to retry"
+pass "the follow-up catches previously completed upgrades and stays pending without notifications"
+
+# Once the user removes the unresolved registration, the same follow-up can
+# complete and let the queue advance. Further runs no-op.
+rm "$authfile"
+run_recheck || fail "the follow-up completes after the unresolved path is removed" "$(cat "$test_tmp/recheck.log")"
+[[ -f $fixture_state/$recheck && -f $fixture_state/later-ran ]] ||
+  fail "a resolved follow-up is marked complete and allows later migrations"
+run_recheck || fail "a completed follow-up is safe to run again"
+pass "the follow-up completes after recovery and is idempotent"
