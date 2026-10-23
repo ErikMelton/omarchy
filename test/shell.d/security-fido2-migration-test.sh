@@ -625,6 +625,7 @@ run_recheck() {
     bash "$runner_copy" "$@" >"$test_tmp/recheck.log" 2>&1
 }
 
+: >"$notifications"
 ln -s "$test_tmp/elsewhere" "$authfile"
 printf 'preserve this target\n' >"$test_tmp/elsewhere"
 if run_recheck; then
