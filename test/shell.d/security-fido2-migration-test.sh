@@ -145,19 +145,23 @@ case "$1" in
 
     exec /usr/bin/chmod 755 "$TEST_AUTHDIR"
     ;;
-  test)
+  find)
     # Looking behind an untraversable directory, never a write. This stub is not
     # really root, so open the directory just long enough to answer the way root
     # would and put its mode straight back -- the suite then still sees whether
     # production left the mode alone.
-    if (( $# != 3 )) || [[ $2 != "-e" && $2 != "-L" ]] || [[ $3 != "$TEST_AUTHFILE" ]]; then
+    if (( $# != 9 )) || [[ $2 != "$TEST_AUTHDIR" || $3 != "-mindepth" || $4 != "1" || $5 != "-maxdepth" || $6 != "1" || $7 != "-name" || $8 != "fido2" || $9 != "-print" ]]; then
       reject "$@"
+    fi
+
+    if (( ${TEST_PROBE_STATUS:-0} != 0 )); then
+      exit "$TEST_PROBE_STATUS"
     fi
 
     saved_mode=$(/usr/bin/stat -c %a "$TEST_AUTHDIR")
     /usr/bin/chmod 755 "$TEST_AUTHDIR"
     probe_status=0
-    /usr/bin/test "$2" "$3" || probe_status=$?
+    /usr/bin/find "$TEST_AUTHDIR" -mindepth 1 -maxdepth 1 -name fido2 -print || probe_status=$?
     /usr/bin/chmod "$saved_mode" "$TEST_AUTHDIR"
     exit "$probe_status"
     ;;
@@ -222,6 +226,7 @@ run_migration() {
   local stat_mode="${5:-}"
   local mktemp_mode="${6:-normal}"
   local notify_status="${7:-0}"
+  local probe_status="${8:-0}"
   local fake_stat=0
 
   if [[ -n $stat_owner || -n $stat_group || -n $stat_mode ]]; then
@@ -239,6 +244,7 @@ run_migration() {
     TEST_LOG="$calls" TEST_MKTEMP_MODE="$mktemp_mode" TEST_NOTIFICATIONS="$notifications" \
     TEST_NOTIFY_STATUS="$notify_status" TEST_STAGES="$stages" TEST_STAT_GROUP="$stat_group" \
     TEST_STAT_MODE="$stat_mode" TEST_STAT_OWNER="$stat_owner" TEST_TMP="$test_tmp" \
+    TEST_PROBE_STATUS="$probe_status" \
     bash -euo pipefail "$migration_copy" >/dev/null
 }
 
@@ -546,6 +552,23 @@ fi
 chmod 755 "$authdir"
 pass "migration looks behind an inaccessible FIDO2 directory without widening it"
 
+# Failing to authorize inspection is not proof of absence. In particular, a
+# hidden symlink must remain pending when sudo fails or the user cancels it.
+ln -s "$test_tmp/missing" "$authfile"
+for probe_status in 1 130; do
+  chmod 000 "$authdir"
+  if run_migration 0 0 "" "" "" normal 0 "$probe_status"; then
+    chmod 755 "$authdir"
+    fail "failed or cancelled inspection leaves the migration pending"
+  fi
+  [[ $(stat -c %a "$authdir") == "0" ]] || fail "failed inspection preserves the directory mode"
+  ! grep -Fq $'sudo\tchmod\t' "$calls" || fail "failed inspection never widens the directory"
+  chmod 755 "$authdir"
+  [[ -L $authfile ]] || fail "failed inspection preserves the hidden symlink"
+done
+rm "$authfile"
+pass "failed and cancelled privileged inspections preserve unresolved state"
+
 # Notification delivery can fail without a user bus or notification server.
 # The unresolved authfile must still fail the migration.
 rm -f "$authfile"
@@ -585,7 +608,10 @@ pass "migration rejects linked configuration directories without touching their 
 recheck="1792702724.sh"
 fixture_root="$test_tmp/omarchy"
 fixture_state="$test_tmp/state"
+runner_copy="$test_tmp/omarchy-migrate"
 mkdir -p "$fixture_root/migrations" "$fixture_state"
+# Keep package transactions on the host out of this fixture's migration queue.
+sed "s|/var/lib/pacman/db.lck|$test_tmp/pacman-db.lck|" "$ROOT/bin/omarchy-migrate" >"$runner_copy"
 sed "s|/etc/fido2/fido2|$authfile|" "$migration" >"$fixture_root/migrations/1787494718.sh"
 cp "$ROOT/migrations/$recheck" "$fixture_root/migrations/$recheck"
 printf 'touch "$OMARCHY_MIGRATION_STATE/later-ran"\n' >"$fixture_root/migrations/9999999999.sh"
@@ -596,7 +622,7 @@ chmod +x "$stub_bin/omarchy-notification-dismiss"
 run_recheck() {
   PATH="$stub_bin:$PATH" OMARCHY_PATH="$fixture_root" OMARCHY_MIGRATION_STATE="$fixture_state" \
     TEST_NOTIFICATIONS="$notifications" TEST_NOTIFY_STATUS=1 \
-    bash "$ROOT/bin/omarchy-migrate" "$@" >"$test_tmp/recheck.log" 2>&1
+    bash "$runner_copy" "$@" >"$test_tmp/recheck.log" 2>&1
 }
 
 ln -s "$test_tmp/elsewhere" "$authfile"
@@ -610,7 +636,7 @@ fi
   fail "the follow-up preserves the unresolved link and its target"
 run_recheck --pending
 grep -Fxq "$recheck" "$test_tmp/recheck.log" || fail "the unresolved follow-up remains pending"
-grep -Fq 'Re-run omarchy-migrate' "$notifications" || fail "recovery instructions explain how to retry"
+grep -Fq 're-run omarchy-migrate' "$notifications" || fail "recovery instructions explain how to retry"
 pass "the follow-up catches previously completed upgrades and stays pending without notifications"
 
 # Once the user removes the unresolved registration, the same follow-up can
