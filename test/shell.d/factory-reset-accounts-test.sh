@@ -66,6 +66,7 @@ usermod() {
 }
 rm() {
   [[ ${FAIL_COMMAND:-} == "rm" && $* == *"$FAIL_ROOT/etc/shadow-"* ]] && return 42
+  [[ ${FAIL_COMMAND:-} == "packages" && ${*: -1} == "$FAIL_ROOT$PROVISIONING_DIR/packages" ]] && return 42
   command rm "$@"
 }
 # FAIL_MV is a pattern for the source of the renames that should fail.
@@ -86,7 +87,10 @@ make_fixture() {
   local top="$1" root_hash="${2:-original-root-hash}"
   local factory="$top/@factory"
   mkdir -p "$top/@" "$factory/etc" "$factory/home/seller" \
+    "$factory/var/lib/omarchy/provisioning/packages" \
     "$factory/usr/bin" "$factory/usr/share/omarchy/install/provisioning"
+  printf 'untrusted archive\n' >"$factory/var/lib/omarchy/provisioning/packages/node-v99.0.0-linux-x64.tar.gz"
+  printf 'wheel\n' >"$factory/var/lib/omarchy/provisioning/groups"
   touch "$top/@/old-system" "$factory/home/seller/private-file" \
     "$factory/usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
   printf '#!/bin/bash\n' >"$factory/usr/bin/omarchy-provision-owner"
@@ -112,6 +116,8 @@ EOF
 
 assert_scrubbed() {
   local root="$1" file
+  [[ ! -e $root/var/lib/omarchy/provisioning/packages ]] || fail "reset removes legacy provisioning archives"
+  [[ $(cat "$root/var/lib/omarchy/provisioning/groups") == "wheel" ]] || fail "reset preserves provisioning groups"
   [[ $(awk -F: '$1 == "root" { print $2 }' "$root/etc/shadow") == "!" ]] ||
     fail "reset erases the root hash while keeping the account locked"
   ! grep -q 'original-.*-hash\|seller' "$root/etc/"{passwd,shadow,group,gshadow} ||
@@ -145,7 +151,7 @@ for scenario in normal locked; do
 done
 
 for target in @omarchy-reset-next @factory; do
-  for command in userdel usermod rm; do
+  for command in userdel usermod rm packages; do
     top="$test_tmp/fail-$target-$command"
     make_fixture "$top"
     if FAIL_COMMAND="$command" FAIL_ROOT="$top/$target" bash "$test_tmp/reset" "$test_tmp" "$top"; then
