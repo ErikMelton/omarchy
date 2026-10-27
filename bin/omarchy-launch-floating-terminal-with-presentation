@@ -43,7 +43,8 @@ else
 fi
 logo_command=$(printf '%q' "$OMARCHY_PATH/bin/omarchy-show-logo")
 done_command=$(printf '%q' "$OMARCHY_PATH/bin/omarchy-show-done")
-presentation_script="$logo_command; $cmd; if (( \$? != 130 )); then $done_command; fi"
+# 130 is the user bailing with Ctrl-C; anything else gets the Done/Failed prompt.
+presentation_script="$logo_command; $cmd; code=\$?; if (( code != 130 )); then $done_command \$code; fi"
 
 if [[ ${cold_sudo:-false} == "true" ]]; then
   exec /usr/bin/setsid /usr/bin/uwsm-app -- /usr/bin/xdg-terminal-exec --app-id=org.omarchy.terminal --title=Omarchy -e /usr/bin/bash -p -c "$presentation_script"

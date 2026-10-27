@@ -10,10 +10,12 @@ trap 'rm -rf "$tmp_dir"' EXIT
 cat >"$tmp_dir/setsid" <<'SCRIPT'
 #!/bin/bash
 printf 'setsid\t%s\n' "$*" >>"$TEST_LOG"
+printf '%s\n' "${@: -1}" >"$TEST_PRESENTATION_SCRIPT"
 SCRIPT
 chmod +x "$tmp_dir/setsid"
 
 export TEST_LOG="$tmp_dir/log"
+export TEST_PRESENTATION_SCRIPT="$tmp_dir/presentation-script"
 export PATH="$tmp_dir:$ROOT/bin:$PATH"
 
 OMARCHY_PATH="$ROOT" "$ROOT/bin/omarchy-launch-floating-terminal-with-presentation" "echo hello"
@@ -21,12 +23,6 @@ OMARCHY_PATH="$ROOT" "$ROOT/bin/omarchy-launch-floating-terminal-with-presentati
 launch=$(tail -n 1 "$TEST_LOG")
 [[ $launch == *"xdg-terminal-exec --app-id=org.omarchy.terminal"* ]] || fail "floating terminal launches Omarchy terminal" "$launch"
 pass "floating terminal launches Omarchy terminal"
-
-[[ $launch == *"$ROOT/bin/omarchy-show-logo; echo hello;"* ]] ||
-  fail "floating terminal fixes the logo callback to the Omarchy tree" "$launch"
-[[ $launch == *"then $ROOT/bin/omarchy-show-done; fi"* ]] ||
-  fail "floating terminal fixes the completion callback to the Omarchy tree" "$launch"
-pass "floating terminal presentation callbacks bypass the user PATH"
 
 gum_home="$tmp_dir/gum-home"
 mkdir -p "$gum_home/.local/state/omarchy/current/theme"
@@ -84,16 +80,13 @@ pass "presentation wrapper binds runtime helpers to its own source root"
 
 linked_root="$tmp_dir/linked Omarchy root"
 ln -s "$cold_root" "$linked_root"
-normalized_root=$(
-  OMARCHY_PATH="$linked_root" /usr/bin/bash -p -c '
-    source "$1"
-    omarchy_security_require_source_root "$2"
-    printf "%s\n" "$OMARCHY_PATH"
-  ' omarchy-source-root-test "$cold_root/bin/omarchy-security-functions" "$launcher_copy"
-)
-[[ $normalized_root == "$cold_root" ]] ||
-  fail "presentation wrapper accepts a matching symlinked runtime root" "$normalized_root"
-pass "presentation wrapper normalizes a matching symlinked runtime root"
+linked_root_status=0
+OMARCHY_PATH="$linked_root" /usr/bin/bash -p -c '
+  source "$1"
+  omarchy_security_require_source_root "$2"
+' omarchy-source-root-test "$cold_root/bin/omarchy-security-functions" "$launcher_copy" >/dev/null 2>&1 || linked_root_status=$?
+(( linked_root_status != 0 )) || fail "presentation wrapper rejects a noncanonical runtime root"
+pass "presentation wrapper keeps the canonical runtime-root requirement"
 
 cat >"$tmp_dir/sudo" <<'SCRIPT'
 #!/bin/bash
@@ -111,7 +104,10 @@ fi
 SCRIPT
 
 for command in omarchy-show-logo omarchy-show-done; do
-  printf '#!/bin/bash\nexit 0\n' >"$cold_root/bin/$command"
+  cat >"$cold_root/bin/$command" <<'SCRIPT'
+#!/bin/bash
+printf '%s\t%s\n' "${0##*/}" "$*" >>"$TEST_LOG"
+SCRIPT
 done
 
 chmod +x "$launcher_copy" "$tmp_dir/sudo" "$cold_root/bin"/*
@@ -141,3 +137,22 @@ printf -v escaped_argument '%q' "argument with spaces"
 [[ ! -s $poison_calls ]] ||
   fail "cold presentation launch preserves inherited Bash callbacks" "$(<"$poison_calls")"
 pass "cold presentation launch sanitizes Bash state, preserves argv, and revokes sudo before pre-entry callbacks"
+
+# Run the generated script as well: a failed command must reach the fixed
+# completion callback with its status, while Ctrl-C must leave it out.
+for status in 42 130; do
+  TEST_SUDO_INVALIDATED="$sudo_invalidated" OMARCHY_PATH="$cold_root" \
+    "$launcher_copy" --cold-sudo /usr/bin/bash -c "exit $status"
+  : >"$TEST_LOG"
+  /usr/bin/bash -p "$TEST_PRESENTATION_SCRIPT"
+  mapfile -t callbacks <"$TEST_LOG"
+  [[ ${callbacks[0]:-} == $'omarchy-show-logo\t' ]] ||
+    fail "presentation runs its fixed logo callback" "$(<"$TEST_LOG")"
+  if (( status == 130 )); then
+    (( ${#callbacks[@]} == 1 )) || fail "Ctrl-C skips the completion callback" "$(<"$TEST_LOG")"
+  else
+    [[ ${callbacks[1]:-} == $'omarchy-show-done\t42' ]] ||
+      fail "presentation forwards command failure to its fixed completion callback" "$(<"$TEST_LOG")"
+  fi
+done
+pass "presentation callbacks use fixed paths and preserve failure and cancellation behavior"

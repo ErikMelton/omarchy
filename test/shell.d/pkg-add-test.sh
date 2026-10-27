@@ -59,7 +59,7 @@ if [[ -e $TEST_SUDO_TICKET ]]; then
   exit 94
 fi
 
-[[ ${1:-} == "-Q" && $# == 2 ]] || exit 95
+[[ ${1:-} == "-Q" && ${2:-} == "--" && $# == 3 ]] || exit 95
 exit "$TEST_QUERY_STATUS"
 SH
 
@@ -91,11 +91,11 @@ run_pkg_add() {
 
 run_pkg_add || fail "package installation succeeds with credential revocation"
 mapfile -t calls <"$call_log"
-[[ ${calls[0]:-} == $'sudo\tpacman\t-S\t--noconfirm\t--needed\tlibfido2\tpam-u2f' ]] ||
+[[ ${calls[0]:-} == $'sudo\tpacman\t-S\t--noconfirm\t--needed\t--\tlibfido2\tpam-u2f' ]] ||
   fail "package helper installs the requested packages" "$(cat "$call_log")"
 [[ ${calls[1]:-} == $'sudo\t-k' ]] ||
   fail "package helper revokes sudo immediately after installation" "$(cat "$call_log")"
-[[ ${calls[2]:-} == $'pacman\t-Q\tlibfido2' && ${calls[3]:-} == $'pacman\t-Q\tpam-u2f' ]] ||
+[[ ${calls[2]:-} == $'pacman\t-Q\t--\tlibfido2' && ${calls[3]:-} == $'pacman\t-Q\t--\tpam-u2f' ]] ||
   fail "package helper checks registration only after revoking sudo" "$(cat "$call_log")"
 (( ${#calls[@]} == 4 )) || fail "package helper makes only the expected calls" "$(cat "$call_log")"
 [[ ! -e $sudo_ticket ]] || fail "package helper leaves no reusable sudo credentials"
