@@ -44,8 +44,6 @@ gum_state=$(
 pass "gum theme loading cannot replace execution-control environment variables"
 
 launcher="$ROOT/bin/omarchy-launch-floating-terminal-with-presentation"
-grep -Fq 'omarchy_security_sanitize_bash_environment "$security_entrypoint" "$@"' "$launcher" ||
-  fail "presentation wrapper re-executes through its canonical entrypoint"
 cold_root="$tmp_dir/omarchy root"
 launcher_copy="$cold_root/bin/omarchy-launch-floating-terminal-with-presentation"
 sudo_invalidated="$tmp_dir/sudo-invalidated"

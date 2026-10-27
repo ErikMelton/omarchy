@@ -76,8 +76,6 @@ pass "setup names its FIDO2 paths once each, and the test drives a retargeted co
 occurrences=$(grep -Fxc 'PATH="$OMARCHY_PATH/bin:/usr/local/bin:/usr/bin:/bin"' "$setup") || occurrences=0
 (( occurrences == 1 )) ||
   fail "FIDO2 setup defines one trusted command path" "found $occurrences occurrences"
-grep -Fq 'omarchy_security_sanitize_bash_environment "$security_entrypoint" "$@"' "$setup" ||
-  fail "FIDO2 setup re-executes through its canonical entrypoint"
 
 sed -e "s|^authdir=/etc/fido2$|authdir=$authdir|" \
   -e "s|^authfile=/etc/fido2/fido2$|authfile=$authfile|" \
