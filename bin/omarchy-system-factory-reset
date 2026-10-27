@@ -32,6 +32,9 @@ set -euo pipefail
 
 PROVISIONING_DIR=/var/lib/omarchy/provisioning
 PACKAGED_PATH=/usr/bin/omarchy-system-factory-reset
+# Bump when restoring an older reset would undo a security fix. This revision
+# must also be present in the factory snapshot's packaged reset command.
+FACTORY_RESET_SAFETY_REVISION=1
 # sudo drops OMARCHY_PATH from the environment, and omarchy-i18n, which
 # supplies every line of the prompts below, needs it there.
 export OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
@@ -630,6 +633,8 @@ sanitize_factory_baseline() {
 stage_full_reset() {
   local top="$TOP_MNT" next="$TOP_MNT/$NEXT_NAME"
 
+  require_factory_snapshot
+
   log "Cloning the factory snapshot"
   [[ -d $next ]] && btrfs subvolume delete --recursive "$next" >/dev/null
   btrfs subvolume snapshot "$top/@factory" "$next" >>"$LOG_FILE"
@@ -706,15 +711,26 @@ stage_full_reset() {
 # A reset is a clone of @factory, so a machine without one has nothing to
 # return to. Only the Quattro installer takes that snapshot.
 require_factory_snapshot() {
-  [[ -d $TOP_MNT/@factory ]] && return 0
+  if [[ ! -d $TOP_MNT/@factory ]]; then
+    echo
+    gum style --bold --foreground 3 "$(omarchy-i18n reset.noSnapshot)"
+    echo
+    gum style --width 80 "$(omarchy-i18n reset.noSnapshotWhy)"
+    echo
+    gum style --foreground 8 "$(omarchy-i18n reset.reinstallHint)"
+    exit 1
+  fi
 
-  echo
-  gum style --bold --foreground 3 "$(omarchy-i18n reset.noSnapshot)"
-  echo
-  gum style --width 80 "$(omarchy-i18n reset.noSnapshotWhy)"
-  echo
-  gum style --foreground 8 "$(omarchy-i18n reset.reinstallHint)"
-  exit 1
+  # Reset restores this command too. Never hand the next owner code that can
+  # bring back the live-package copy path on a subsequent reset. Inspect the
+  # declaration as data; do not execute code from the factory snapshot.
+  local reset="$TOP_MNT/@factory/usr/bin/omarchy-system-factory-reset" revision=""
+  if [[ -f $reset && ! -L $reset && -x $reset ]]; then
+    revision=$(sed -n 's/^FACTORY_RESET_SAFETY_REVISION=//p' "$reset") ||
+      fail "could not read the factory snapshot's reset safety revision"
+  fi
+  [[ $revision == $FACTORY_RESET_SAFETY_REVISION ]] ||
+    fail "the factory snapshot has unsupported reset code; reinstall Omarchy from a current ISO before handing this machine to a new owner"
 }
 
 main() {

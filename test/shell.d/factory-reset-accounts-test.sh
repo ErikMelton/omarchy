@@ -17,6 +17,7 @@ trap 'rm -rf "$test_tmp"' EXIT
 
 # Load the production functions without self-elevation or the reset entrypoint.
 awk '
+  /^FACTORY_RESET_SAFETY_REVISION=/ { print }
   /^[a-z_]+\(\) \{/ { copying = 1 }
   copying { print }
   /^}/ { copying = 0 }
@@ -91,6 +92,8 @@ make_fixture() {
     "$factory/usr/bin" "$factory/usr/share/omarchy/install/provisioning"
   printf 'untrusted archive\n' >"$factory/var/lib/omarchy/provisioning/packages/node-v99.0.0-linux-x64.tar.gz"
   printf 'wheel\n' >"$factory/var/lib/omarchy/provisioning/groups"
+  cp "$ROOT/bin/omarchy-system-factory-reset" "$factory/usr/bin/omarchy-system-factory-reset"
+  chmod +x "$factory/usr/bin/omarchy-system-factory-reset"
   touch "$top/@/old-system" "$factory/home/seller/private-file" \
     "$factory/usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
   printf '#!/bin/bash\n' >"$factory/usr/bin/omarchy-provision-owner"
@@ -148,6 +151,29 @@ for scenario in normal locked; do
   assert_scrubbed "$top/@factory"
   assert_scrubbed "$top/@"
   pass "$scenario reset scrubs both roots, preserves service accounts, and can be repeated"
+done
+
+for revision in legacy missing symlink unknown executable; do
+  top="$test_tmp/unsafe-$revision"
+  make_fixture "$top"
+  reset="$top/@factory/usr/bin/omarchy-system-factory-reset"
+  case $revision in
+    legacy) printf '#!/bin/bash\n' >"$reset" ;;
+    missing) rm "$reset" ;;
+    symlink) ln -sf "$ROOT/bin/omarchy-system-factory-reset" "$reset" ;;
+    unknown) sed -i 's/^FACTORY_RESET_SAFETY_REVISION=.*/FACTORY_RESET_SAFETY_REVISION=unknown/' "$reset" ;;
+    executable) printf 'FACTORY_RESET_SAFETY_REVISION=$(touch %s)\n' "$top/executed" >"$reset" ;;
+  esac
+  if bash "$test_tmp/reset" "$test_tmp" "$top"; then
+    fail "reset accepted $revision factory code"
+  fi
+  [[ -f $top/@/old-system && ! -e $top/rebuilt && ! -e $top/executed ]] ||
+    fail "unsupported factory code must not execute, rebuild or activate"
+  grep -q 'original-user-hash' "$top/@factory/etc/shadow" &&
+    [[ $(cat "$top/@factory/read-only") == "true" && -d $top/@factory/var/lib/omarchy/provisioning/packages ]] ||
+    fail "unsupported factory code must leave the baseline unchanged"
+  grep -q 'reinstall Omarchy from a current ISO' "$top/reset.log" || fail "unsupported reset explains recovery"
+  pass "$revision factory code is refused before changing either root"
 done
 
 for target in @omarchy-reset-next @factory; do
