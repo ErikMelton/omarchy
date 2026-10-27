@@ -260,7 +260,7 @@ with `visudo -c` before install and removed by `omarchy-dev-unlink`; unlike
 
 Factory reset is an exception: it always self-elevates through `/usr/bin/omarchy-system-factory-reset` and refuses a checkout copy that differs from the installed command, including when invoked with `sudo`. Install the matching package before resetting so a newer checkout cannot silently hand off to older account-scrubbing code.
 
-The factory snapshot's packaged reset command must declare the same `FACTORY_RESET_SAFETY_REVISION` as the running command. Missing, unknown or mismatched revisions stop reset before confirmation or changes to the baseline; installing updates into the live root does not update `@factory`, so an unsupported snapshot requires a fresh install from a current ISO. The revision is read as data, never by executing the snapshot's command. Bump it when a reset security fix must survive restoration of the baseline; ordinary changes do not require a bump. Both the staged root and retained baseline also lose legacy provisioning package archives before owner setup.
+Factory reset removes legacy provisioning package archives from both the staged root and retained `@factory` baseline. It also writes `/etc/systemd/system/omarchy-provision-owner.service.d/10-discard-packages.conf` into both roots. Its `ExecStartPre` deletes the provisioning packages before owner setup, so a later reset performed by older restored code cannot pass a copied live archive to the next owner's setup. The drop-in survives in the baseline even when that older reset replaces the main provisioning unit. Older factory snapshots remain usable.
 
 ## Runtime finalization (`omarchy-provision-user`)
 

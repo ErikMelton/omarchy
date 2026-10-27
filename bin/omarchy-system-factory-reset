@@ -32,9 +32,6 @@ set -euo pipefail
 
 PROVISIONING_DIR=/var/lib/omarchy/provisioning
 PACKAGED_PATH=/usr/bin/omarchy-system-factory-reset
-# Bump when restoring an older reset would undo a security fix. This revision
-# must also be present in the factory snapshot's packaged reset command.
-FACTORY_RESET_SAFETY_REVISION=1
 # sudo drops OMARCHY_PATH from the environment, and omarchy-i18n, which
 # supplies every line of the prompts below, needs it there.
 export OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
@@ -617,7 +614,7 @@ sanitize_factory_baseline() {
   local factory="$1"
   btrfs property set -ts "$factory" ro false
 
-  if ! scrub_factory_accounts "$factory" || ! rm -rf "$factory$PROVISIONING_DIR/packages"; then
+  if ! scrub_factory_accounts "$factory" || ! scrub_factory_packages "$factory"; then
     btrfs property set -ts "$factory" ro true
     fail "could not remove account credentials or provisioning packages from the factory baseline (see $LOG_FILE)"
   fi
@@ -630,10 +627,21 @@ sanitize_factory_baseline() {
   btrfs property set -ts "$factory" ro true
 }
 
+scrub_factory_packages() {
+  local root="$1"
+  rm -rf "$root$PROVISIONING_DIR/packages" || return 1
+
+  # An older reset restored from @factory can copy live archives back into
+  # the next root. Keep this cleanup in both roots so systemd discards them
+  # before even that older owner setup can unpack them.
+  install -Dm644 /dev/stdin "$root/etc/systemd/system/omarchy-provision-owner.service.d/10-discard-packages.conf" <<EOF
+[Service]
+ExecStartPre=/usr/bin/rm -rf $PROVISIONING_DIR/packages
+EOF
+}
+
 stage_full_reset() {
   local top="$TOP_MNT" next="$TOP_MNT/$NEXT_NAME"
-
-  require_factory_snapshot
 
   log "Cloning the factory snapshot"
   [[ -d $next ]] && btrfs subvolume delete --recursive "$next" >/dev/null
@@ -660,8 +668,8 @@ stage_full_reset() {
 
   # Older factory snapshots still unpack bundled Node archives during owner
   # setup. Discard those unverified packages before that code can run.
-  rm -rf "$next$PROVISIONING_DIR/packages" ||
-    fail "could not remove provisioning packages from the factory system (see $LOG_FILE)"
+  scrub_factory_packages "$next" ||
+    fail "could not sanitize provisioning packages in the factory system (see $LOG_FILE)"
 
   # @factory itself survives the wipe as the baseline for future resets. If it
   # came from a normal install it still holds the seller's account and
@@ -711,26 +719,15 @@ stage_full_reset() {
 # A reset is a clone of @factory, so a machine without one has nothing to
 # return to. Only the Quattro installer takes that snapshot.
 require_factory_snapshot() {
-  if [[ ! -d $TOP_MNT/@factory ]]; then
-    echo
-    gum style --bold --foreground 3 "$(omarchy-i18n reset.noSnapshot)"
-    echo
-    gum style --width 80 "$(omarchy-i18n reset.noSnapshotWhy)"
-    echo
-    gum style --foreground 8 "$(omarchy-i18n reset.reinstallHint)"
-    exit 1
-  fi
+  [[ -d $TOP_MNT/@factory ]] && return 0
 
-  # Reset restores this command too. Never hand the next owner code that can
-  # bring back the live-package copy path on a subsequent reset. Inspect the
-  # declaration as data; do not execute code from the factory snapshot.
-  local reset="$TOP_MNT/@factory/usr/bin/omarchy-system-factory-reset" revision=""
-  if [[ -f $reset && ! -L $reset && -x $reset ]]; then
-    revision=$(sed -n 's/^FACTORY_RESET_SAFETY_REVISION=//p' "$reset") ||
-      fail "could not read the factory snapshot's reset safety revision"
-  fi
-  [[ $revision == $FACTORY_RESET_SAFETY_REVISION ]] ||
-    fail "the factory snapshot has unsupported reset code; reinstall Omarchy from a current ISO before handing this machine to a new owner"
+  echo
+  gum style --bold --foreground 3 "$(omarchy-i18n reset.noSnapshot)"
+  echo
+  gum style --width 80 "$(omarchy-i18n reset.noSnapshotWhy)"
+  echo
+  gum style --foreground 8 "$(omarchy-i18n reset.reinstallHint)"
+  exit 1
 }
 
 main() {

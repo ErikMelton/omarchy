@@ -14,9 +14,9 @@ You have two passwords on an encrypted install: the one that unlocks the drive a
 
 ## Passing on a machine you've already used
 
-If you're handing your machine over to someone else, _Setup > Reset Computer_ in the Omarchy menu returns it to first-boot setup when its factory snapshot can be restored safely. Type `reset` to confirm, then reboot. That wipes every user account and everything in `/home`, throws away all the packages and system changes you made since installation, and clears the machine's identity — network connections, host keys, and all. What comes back up is the setup wizard from the first boot, ready for its new owner to enter their own name, password, and encryption password.
+If you're handing your machine over to someone else, you don't have to reinstall it. Run _Setup > Reset Computer_ in the Omarchy menu, type `reset` to confirm, and reboot. That wipes every user account and everything in `/home`, throws away all the packages and system changes you made since installation, and clears the machine's identity — network connections, host keys, and all. What comes back up is the setup wizard from the first boot, ready for its new owner to enter their own name, password, and encryption password.
 
-It works by restoring the baseline snapshot the installer takes, so it's only available on machines installed from the Omarchy ISO. If that snapshot contains reset code that is too old to restore safely, reset stops and asks you to reinstall from a current ISO; updating the running system does not update the factory snapshot. And on a drive without encryption, a reset is deletion rather than a secure erase, so if the data was sensitive, do a fresh install instead.
+It works by restoring the baseline snapshot the installer takes, so it's only available on machines installed from the Omarchy ISO. And on a drive without encryption, a reset is deletion rather than a secure erase, so if the data was sensitive, do a fresh install instead.
 
 ## Passwordless sudo
 

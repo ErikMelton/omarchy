@@ -21,7 +21,6 @@ fake_platform "$tmp/apple" aarch64-apple
 
 # Load the production functions without self-elevation or the reset entrypoint.
 awk '
-  /^FACTORY_RESET_SAFETY_REVISION=/ { print }
   /^[a-z_]+\(\) \{/ { copying = 1 }
   copying { print }
   /^}/ { copying = 0 }
@@ -170,8 +169,6 @@ fixture() {
     "$tmp/top/@factory/usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
   printf '#!/bin/bash\n' >"$tmp/top/@factory/usr/bin/omarchy-provision-owner"
   chmod +x "$tmp/top/@factory/usr/bin/omarchy-provision-owner"
-  cp "$ROOT/bin/omarchy-system-factory-reset" "$tmp/top/@factory/usr/bin/omarchy-system-factory-reset"
-  chmod +x "$tmp/top/@factory/usr/bin/omarchy-system-factory-reset"
   printf '%s /boot vfat defaults 0 2\n' "$tmp/esp" >"$tmp/top/@factory/etc/fstab"
   : >"$device"
   printf '0 %s\n' "$current_password" >"$tmp/slots"
